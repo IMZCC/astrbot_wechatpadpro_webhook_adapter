@@ -20,17 +20,17 @@ from astrbot.core.platform.platform_metadata import PlatformMetadata
 from astrbot.core.utils.tencent_record_helper import audio_to_tencent_silk_base64
 
 if TYPE_CHECKING:
-    from .webhook_adapter import WeChatPadProAdapter
+    from .webhook_adapter import WeChatPadProWebhookAdapter
 
 
-class WeChatPadProMessageEvent(AstrMessageEvent):
+class WeChatPadProWebhookMessageEvent(AstrMessageEvent):
     def __init__(
         self,
         message_str: str,
         message_obj: AstrBotMessage,
         platform_meta: PlatformMetadata,
         session_id: str,
-        adapter: "WeChatPadProAdapter",  # 传递适配器实例
+        adapter: "WeChatPadProWebhookAdapter",  # 传递适配器实例
     ):
         super().__init__(message_str, message_obj, platform_meta, session_id)
         self.message_obj = message_obj  # Save the full message object
@@ -56,10 +56,10 @@ class WeChatPadProMessageEvent(AstrMessageEvent):
         b64c = self._compress_image(raw)
         payload = {
             "MsgItem": [
-                {"ImageContent": b64c, "MsgType": 3, "ToUserName": self.session_id}
+                {"Base64": b64c, "ToWxid": self.session_id, "Wxid": self.adapter.wxid}
             ]
         }
-        url = f"{self.adapter.base_url}/message/SendImageNewMessage"
+        url = f"{self.adapter.base_url}/Msg/UploadImg"
         await self._post(session, url, payload)
 
     async def _send_text(self, session: aiohttp.ClientSession, text: str):
@@ -86,15 +86,13 @@ class WeChatPadProMessageEvent(AstrMessageEvent):
         else:
             session_id = self.session_id
         payload = {
-            "MsgItem": [
-                {
-                    "MsgType": 1,
-                    "TextContent": message_text,
-                    "ToUserName": session_id,
-                }
-            ]
+            "AT":"",
+            "Content": message_text,
+            "Type": 0,
+            "ToWxid": session_id,
+            "Wxid": self.adapter.wxid
         }
-        url = f"{self.adapter.base_url}/message/SendTextMessage"
+        url = f"{self.adapter.base_url}/Msg/SendTxt"
         await self._post(session, url, payload)
 
     async def _send_emoji(self, session: aiohttp.ClientSession, comp: WechatEmoji):
@@ -107,7 +105,7 @@ class WeChatPadProMessageEvent(AstrMessageEvent):
                 }
             ]
         }
-        url = f"{self.adapter.base_url}/message/SendEmojiMessage"
+        url = f"{self.adapter.base_url}/Msg/SendEmoji"
         await self._post(session, url, payload)
 
     async def _send_voice(self, session: aiohttp.ClientSession, comp: Record):
@@ -120,7 +118,7 @@ class WeChatPadProMessageEvent(AstrMessageEvent):
             "VoiceFormat": 4,
             "VoiceSecond": duration,
         }
-        url = f"{self.adapter.base_url}/message/SendVoice"
+        url = f"{self.adapter.base_url}/Msg/SendVoice"
         await self._post(session, url, payload)
 
     @staticmethod
@@ -141,11 +139,10 @@ class WeChatPadProMessageEvent(AstrMessageEvent):
         return base64.b64encode(buf.getvalue()).decode()
 
     async def _post(self, session, url, payload):
-        params = {"key": self.adapter.auth_key}
         try:
-            async with session.post(url, params=params, json=payload) as resp:
+            async with session.post(url, json=payload) as resp:
                 data = await resp.json()
-                if resp.status != 200 or data.get("Code") != 200:
+                if resp.status != 200 or data.get("Code") != 0 or data.get("Success") is False:
                     logger.error(f"{url} failed: {resp.status} {data}")
         except Exception as e:
             logger.error(f"{url} error: {e}")

@@ -1,6 +1,6 @@
 name: astrbot_wechatpadpro_webhook_adapter
 desc: WeChatPadPro 的 Webhook 适配器插件，将消息接收方式从 WebSocket 更改为 Webhook
 help: 请查看 README.md 文件了解详细使用说明
-version: v1.0.0
+version: v1.1.0 
 author: AstrBot
 repo: https://github.com/astrbot/astrbot_wechatpadpro_webhook_adapter

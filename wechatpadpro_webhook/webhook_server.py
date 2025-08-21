@@ -16,10 +16,14 @@ app = Flask(__name__)
 message_queue = asyncio.Queue()
 
 # 配置
-WEBHOOK_SECRET = "wh_sk_2024_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
-INCLUDE_SELF_MESSAGE = True
 PROCESSED_MESSAGES = set()
 MAX_QUEUE_SIZE = 1000
+WX_ID = None
+DEBUG_MODE = True
+
+def set_wx_id(wx_id):
+    global WX_ID
+    WX_ID = wx_id
 
 
 def set_message_queue(queue):
@@ -74,54 +78,55 @@ def format_message(data):
 # Webhook 接口
 @app.route('/webhook', methods=['POST', 'HEAD'])
 def webhook():
-    global message_queue, PROCESSED_MESSAGES
+    global message_queue, PROCESSED_MESSAGES, DEBUG_MODE
     
     if request.method == 'HEAD':
         # 健康检查，直接返回200
         return '', 200
-    
-    raw_data = request.data
-
-    # 获取请求数据
-    timestamp = request.headers.get('X-Webhook-Timestamp')
-    signature = request.headers.get('X-Webhook-Signature')
-    
-
-    logger.info(f"Received {timestamp}, {signature}, {raw_data}")
-    
-    # 验证签名
-    if not verify_signature(raw_data, timestamp, signature, WEBHOOK_SECRET):
-        return jsonify({"status": "error", "message": "Invalid signature"}), 401
-    
     # 解析消息
     try:
-        body = request.get_data(as_text=True)
-        message = json.loads(body)
+        data = request.get_json(force=True, silent=True) or {}
+        # 调试信息
+        if DEBUG_MODE:
+            logging.info(f"🔍 原始数据: {data}")
+            logging.info(f"🔍 Headers: {dict(request.headers)}")
+
+        # 兼容大小写的字段获取
+        wxid = data.get('Wxid') or data.get('wxid')
+
+        # 调试模式下不强制验证
+        if DEBUG_MODE:
+            logging.warning("⚠️ 调试模式: 自动通过验证")
+            wxid = WX_ID
+
+        # 验证逻辑
+        if not wxid:
+            logging.warning("⚠️ 缺少wxid字段")
+            return jsonify({"status": "rejected", "reason": "missing wxid"}), 400
+
+        if wxid != WX_ID:
+            logging.warning(f"⚠️ 拒绝非目标消息 (来自: {wxid})")
+            return jsonify({"status": "rejected", "reason": "invalid sender"}), 403
+        
+        # PROCESSED_MESSAGES.add(message_id)
+        # if len(PROCESSED_MESSAGES) > MAX_QUEUE_SIZE:
+        #     PROCESSED_MESSAGES.pop()
+
+        threading.Thread(target=lambda: asyncio.run(message_queue.put(data))).start()
+        return jsonify({
+            "status": "accepted",
+            "received_wxid": wxid,
+            "timestamp": datetime.now().timestamp()
+        }), 200
     except json.JSONDecodeError:
         return jsonify({"status": "error", "message": "Invalid JSON"}), 400
-    
-    # 检查消息ID
-    message_id = message.get("msgId")
-    if not message_id:
-        return jsonify({"status": "error", "message": "Missing message ID"}), 400
-    
-    # 检查是否重复消息
-    if message_id in PROCESSED_MESSAGES:
-        return jsonify({"status": "success", "message": "Duplicate message"}), 200
-    
-    # 添加到已处理集合
-    PROCESSED_MESSAGES.add(message_id)
-    if len(PROCESSED_MESSAGES) > MAX_QUEUE_SIZE:
-        PROCESSED_MESSAGES.pop()
-    
-    # 将消息加入队列异步处理
-    try:
-        threading.Thread(target=lambda: asyncio.run(message_queue.put(message))).start()
     except queue.Full:
         return jsonify({"status": "error", "message": "Server busy"}), 503
+
+    
     
     # 立即返回成功
-    return jsonify({"status": "success"}), 200
+    
 
 server = None
 def run_webhook_server(host='0.0.0.0', port=8000):
