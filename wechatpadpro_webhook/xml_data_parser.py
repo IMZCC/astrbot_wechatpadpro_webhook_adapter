@@ -31,27 +31,35 @@ class GeweDataParser:
         self.msg_id = raw_message.get("msg_id", "")
 
     def _format_to_xml(self):
-        if self._xml:
+        if self._xml is not None:
             return self._xml
 
         try:
             msg_str = self.content
-            if not self.is_private_chat:
+            if not self.is_private_chat and self.content:
                 parts = self.content.split(":\n", 1)
                 msg_str = parts[1] if len(parts) == 2 else self.content
 
-            self._xml = eT.fromstring(msg_str)
-            return self._xml
+            if msg_str:
+                self._xml = eT.fromstring(msg_str)
+                return self._xml
+            else:
+                logger.warning("[XML解析失败] 消息内容为空")
+                return None
         except Exception as e:
             logger.error(f"[XML解析失败] {e}")
-            raise
+            return None
 
     async def parse_mutil_49(self) -> list[BaseMessageComponent] | None:
         """
         处理 msg_type == 49 的多种 appmsg 类型（目前支持 type==57）
         """
         try:
-            appmsg_type = self._format_to_xml().findtext(".//appmsg/type")
+            xml_root = self._format_to_xml()
+            if xml_root is None:
+                return None
+                
+            appmsg_type = xml_root.findtext(".//appmsg/type")
             if appmsg_type == "57":
                 return await self.parse_reply()
         except Exception as e:
@@ -65,7 +73,11 @@ class GeweDataParser:
         components = []
 
         try:
-            appmsg = self._format_to_xml().find("appmsg")
+            xml_root = self._format_to_xml()
+            if xml_root is None:
+                return [Plain("[引用消息解析失败]")]
+
+            appmsg = xml_root.find("appmsg")
             if appmsg is None:
                 return [Plain("[引用消息解析失败]")]
 
@@ -87,22 +99,24 @@ class GeweDataParser:
                     quoted_image_b64 = self.cached_images.get(str(svrid))
                     if not quoted_image_b64:
                         try:
-                            quote_xml = eT.fromstring(quote_content)
-                            img = quote_xml.find("img")
-                            cdn_url = (
-                                img.get("cdnbigimgurl") or img.get("cdnmidimgurl")
-                                if img is not None
-                                else None
-                            )
-                            if cdn_url and self.downloader:
-                                image_resp = await self.downloader(
-                                    self.from_user_name, self.to_user_name, self.msg_id
+                            if quote_content:
+                                quote_xml = eT.fromstring(quote_content)
+                                img = quote_xml.find("img")
+                                cdn_url = (
+                                    img.get("cdnbigimgurl") or img.get("cdnmidimgurl")
+                                    if img is not None
+                                    else None
                                 )
-                                quoted_image_b64 = (
-                                    image_resp.get("Data", {})
-                                    .get("Data", {})
-                                    .get("Buffer")
-                                )
+                                if cdn_url and self.downloader:
+                                    image_resp = await self.downloader(
+                                        self.from_user_name, self.to_user_name, self.msg_id
+                                    )
+                                    if image_resp and "Data" in image_resp:
+                                        quoted_image_b64 = (
+                                            image_resp.get("Data", {})
+                                            .get("Data", {})
+                                            .get("Buffer")
+                                        )
                         except Exception as e:
                             logger.warning(f"[引用图片解析失败] svrid={svrid} err={e}")
 
@@ -120,9 +134,10 @@ class GeweDataParser:
 
                 case 49:  # 嵌套引用
                     try:
-                        nested_root = eT.fromstring(quote_content)
-                        nested_title = nested_root.findtext(".//appmsg/title", "")
-                        components.append(Plain(f"[引用] {nickname}: {nested_title}"))
+                        if quote_content:
+                            nested_root = eT.fromstring(quote_content)
+                            nested_title = nested_root.findtext(".//appmsg/title", "")
+                            components.append(Plain(f"[引用] {nickname}: {nested_title}"))
                     except Exception as e:
                         logger.warning(f"[嵌套引用解析失败] err={e}")
                         components.append(Plain(f"[引用] {nickname}: [嵌套引用消息]"))
@@ -147,7 +162,11 @@ class GeweDataParser:
         处理 msg_type == 47 的表情消息（emoji）
         """
         try:
-            emoji_element = self._format_to_xml().find(".//emoji")
+            xml_root = self._format_to_xml()
+            if xml_root is None:
+                return None
+                
+            emoji_element = xml_root.find(".//emoji")
             if emoji_element is not None:
                 return Emoji(
                     md5=emoji_element.get("md5"),
