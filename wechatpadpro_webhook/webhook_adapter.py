@@ -39,7 +39,7 @@ except ImportError as e:
     "webhook_listen_port": 9909,
     "webhook_secret_key": "aaaa",
    
-}, override = True)
+})
 class WeChatPadProWebhookAdapter(Platform):
     def __init__(
         self, platform_config: dict, platform_settings: dict, event_queue: asyncio.Queue
